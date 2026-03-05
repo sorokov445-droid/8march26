@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f7eef3" />
+  <title>Цитаты</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Lora:wght@500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg1:#fff8fc; --bg2:#f3ecf4; --text:#2f2430; --muted:#766978;
+      --accent:#d85e92; --accent2:#b84575; --radius:22px;
+      --shadow:0 14px 34px rgba(98,63,84,.14);
+      --ui:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+      --quote:Lora,Georgia,"Times New Roman",serif;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0}
+    body{
+      min-height:100vh;
+      font-family:var(--ui);
+      color:var(--text);
+      background:
+        radial-gradient(circle at 12% 8%, rgba(255,214,234,.55), transparent 40%),
+        radial-gradient(circle at 93% 8%, rgba(255,228,240,.45), transparent 35%),
+        linear-gradient(180deg,var(--bg1),var(--bg2));
+      display:flex; justify-content:center; align-items:flex-start;
+      padding:max(14px, env(safe-area-inset-top)) 14px max(18px, env(safe-area-inset-bottom));
+    }
+    .app{width:100%; max-width:560px; display:flex; flex-direction:column; gap:14px}
+    .shell{
+      background:rgba(255,255,255,.76);
+      border:1px solid rgba(255,255,255,.9);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      padding:14px; backdrop-filter: blur(8px);
+    }
+    .preview-wrap{display:flex; justify-content:center}
+    canvas{display:block; width:100%; height:auto; background:transparent; border-radius:0}
+    .controls{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+    button{
+      appearance:none; border:none; border-radius:14px; padding:13px 14px;
+      font:700 15px var(--ui); cursor:pointer;
+      transition:transform .08s ease, opacity .15s ease;
+      box-shadow:0 10px 20px rgba(0,0,0,.08);
+    }
+    button:active{transform:translateY(1px)}
+    button:disabled{opacity:.55;cursor:wait}
+    .btn-secondary{background:rgba(255,255,255,.9); color:var(--text); border:1px solid rgba(0,0,0,.05)}
+    .btn-primary{background:linear-gradient(180deg,var(--accent),var(--accent2)); color:#fff}
+    .status{margin:0; min-height:1.25em; text-align:center; color:var(--muted); font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="shell"><div class="preview-wrap"><canvas id="previewCanvas"></canvas></div></div>
+    <div class="controls">
+      <button id="newBtn" class="btn-secondary" type="button">Другая цитата</button>
+      <button id="saveBtn" class="btn-primary" type="button">Сохранить</button>
+    </div>
+    <p id="status" class="status">Загружаем цитаты...</p>
+  </div>
+
+  <script>
+  const state = {
+    items: [], current: null, lastIndex: -1, busy: false,
+    imgCache: new Map()
+  };
+
+  const canvas = document.getElementById('previewCanvas');
+  const ctx = canvas.getContext('2d', { alpha: true });
+  const statusEl = document.getElementById('status');
+  const newBtn = document.getElementById('newBtn');
+  const saveBtn = document.getElementById('saveBtn');
+
+  const CARD_RATIO = 1.45;
+
+  function setStatus(t){ statusEl.textContent = t; }
+  function setBusy(flag){ state.busy = flag; newBtn.disabled = flag; saveBtn.disabled = flag; }
+
+  function normalizePhoto(name){
+    const n = String(name || '').trim();
+    if (!n) return '';
+    return /\.[a-z0-9]{2,5}$/i.test(n) ? n : n + '.jpg';
+  }
+
+  function parseLine(line){
+    const s = String(line || '').trim();
+    if (!s) return null;
+    // Формат: текст цитаты (Автор) (photo.jpg)
+    const m = s.match(/^(.*)\s*\(([^()]*)\)\s*\(([^()]*)\)\s*$/);
+    if (!m) return null;
+    const quote = (m[1] || '').trim();
+    const author = (m[2] || '').trim() || 'Автор';
+    const photo = normalizePhoto(m[3]);
+    if (!quote) return null;
+    return { quote, author, photo };
+  }
+
+  async function loadItems(){
+    let res;
+    try {
+      res = await fetch('citaty.txt', { cache: 'no-store' });
+    } catch (e) {
+      if (location.protocol === 'file:') {
+        throw new Error('Локальный запуск через file:// блокирует чтение citaty.txt. Откройте сайт через локальный сервер (например, python -m http.server).');
+      }
+      throw new Error('Не удалось загрузить citaty.txt');
+    }
+    if (!res.ok) throw new Error('Файл citaty.txt не найден');
+    const txt = await res.text();
+    const items = txt.split(/\r?\n/).map(parseLine).filter(Boolean);
+    if (!items.length) throw new Error('В citaty.txt нет корректных строк формата: Текст (Автор) (photo.jpg)');
+    state.items = items;
+  }
+
+  function pickRandom(){
+    if (!state.items.length) return null;
+    let idx = 0;
+    if (state.items.length > 1) {
+      do idx = Math.floor(Math.random() * state.items.length);
+      while (idx === state.lastIndex);
+    }
+    state.lastIndex = idx;
+    state.current = state.items[idx];
+    return state.current;
+  }
+
+  function roundRectPath(c,x,y,w,h,r){
+    const rr = Math.min(r, w/2, h/2);
+    c.beginPath();
+    c.moveTo(x+rr,y);
+    c.arcTo(x+w,y,x+w,y+h,rr);
+    c.arcTo(x+w,y+h,x,y+h,rr);
+    c.arcTo(x,y+h,x,y,rr);
+    c.arcTo(x,y,x+w,y,rr);
+    c.closePath();
+  }
+
+  function wrapLines(c, text, maxWidth){
+    const words = String(text || '').replace(/\s+/g,' ').trim().split(' ').filter(Boolean);
+    if (!words.length) return [''];
+    const lines = [];
+    let line = '';
+    for (const word of words) {
+      const test = line ? line + ' ' + word : word;
+      if (c.measureText(test).width <= maxWidth) {
+        line = test;
+      } else if (!line) {
+        let part = '';
+        for (const ch of word) {
+          const t = part + ch;
+          if (c.measureText(t).width <= maxWidth) part = t;
+          else { if (part) lines.push(part); part = ch; }
+        }
+        line = part;
+      } else {
+        lines.push(line); line = word;
+      }
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  function drawLines(c, lines, x, y, lh){ lines.forEach((ln,i)=>c.fillText(ln,x,y+i*lh)); }
+
+  function getCanvasCssWidth(){
+    const host = canvas.closest('.shell') || document.body;
+    const rect = host.getBoundingClientRect();
+    return Math.min(520, Math.max(300, Math.round(rect.width - 28)));
+  }
+
+  function withCacheBust(url){
+    if (!url) return url;
+    if (location.protocol === 'file:') return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}v=${Date.now()}`;
+  }
+
+  function loadImage(url){
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      if (!/^file:/i.test(location.protocol)) img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Не удалось загрузить фото: ' + url));
+      img.src = withCacheBust(url);
+    });
+  }
+
+  async function getAuthorImage(photo){
+    if (!photo) return null;
+    const key = normalizePhoto(photo);
+    if (state.imgCache.has(key)) return state.imgCache.get(key);
+
+    const candidates = [key];
+    if (!/\.[a-z0-9]{2,5}$/i.test(photo || '')) candidates.push(key + '.jpg');
+
+    for (const c of [...new Set(candidates)]) {
+      try {
+        const img = await loadImage(c);
+        state.imgCache.set(key, img);
+        return img;
+      } catch {}
+    }
+    return null;
+  }
+
+  function drawPhotoCover(img, x, y, w, h){
+    const sw = img.naturalWidth || img.width;
+    const sh = img.naturalHeight || img.height;
+    if (!sw || !sh) return;
+    const scale = Math.max(w / sw, h / sh) * 1.03; // лёгкий автозум, чтобы съедать белые края архивных фото
+    const dw = sw * scale;
+    const dh = sh * scale;
+    const dx = x + (w - dw) / 2;
+    const dy = y + (h - dh) / 2;
+    ctx.drawImage(img, dx, dy, dw, dh);
+  }
+
+  async function renderCard(){
+    const entry = state.current;
+    const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+    const cssWidth = getCanvasCssWidth();
+
+    // Сначала считаем текст, чтобы высота карточки зависела от длины цитаты
+    const quoteBoxX = Math.round(cssWidth * .07);
+    const quoteBoxW = cssWidth - quoteBoxX * 2;
+    const quoteFont = Math.max(17, Math.round(cssWidth * .048));
+    const lineHeight = Math.round(quoteFont * 1.34);
+    const textW = quoteBoxW - 34;
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.font = `500 ${quoteFont}px Lora, Georgia, serif`;
+    const lines = wrapLines(ctx, entry?.quote || '...', textW);
+
+    const photoX = Math.round(cssWidth * .07);
+    const photoY = Math.round(cssWidth * .05);
+    const photoW = cssWidth - photoX * 2;
+    const photoH = Math.round(cssWidth * .62);
+
+    const quoteBoxY = photoY + photoH + Math.round(cssWidth * .06);
+    const quoteTopPad = 62;
+    const quoteBottomPad = 34;
+    const quoteBoxH = Math.max(150, quoteTopPad + (lines.length - 1) * lineHeight + quoteBottomPad);
+
+    const authorGap = 28;
+    const authorFont = Math.max(11, Math.round(cssWidth*.028));
+    const bottomPad = 34;
+    const cssHeight = quoteBoxY + quoteBoxH + authorGap + authorFont + bottomPad;
+
+    canvas.width = Math.round(cssWidth * dpr);
+    canvas.height = Math.round(cssHeight * dpr);
+    canvas.style.width = cssWidth + 'px';
+    canvas.style.height = cssHeight + 'px';
+
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,cssWidth,cssHeight); // прозрачный фон вокруг карточки
+
+    // Карточка без скругления (чтобы не было чёрных углов в просмотрщиках)
+    const bg = ctx.createLinearGradient(0,0,0,cssHeight);
+    bg.addColorStop(0,'#fffafc'); bg.addColorStop(1,'#fff2f7');
+    ctx.fillStyle = bg; ctx.fillRect(0,0,cssWidth,cssHeight);
+
+    ctx.globalAlpha = .65; ctx.fillStyle='rgba(255,214,234,.55)';
+    ctx.beginPath(); ctx.arc(cssWidth*.15, cssHeight*.13, cssWidth*.16, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(255,240,246,.95)';
+    ctx.beginPath(); ctx.arc(cssWidth*.86, cssHeight*.12, cssWidth*.15, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.strokeStyle='rgba(216,94,146,.20)'; ctx.lineWidth=1.5;
+    ctx.strokeRect(8,8,cssWidth-16,cssHeight-16);
+
+    // Фото автора (без белой подложки)
+    const img = entry ? await getAuthorImage(entry.photo) : null;
+    ctx.save(); roundRectPath(ctx, photoX, photoY, photoW, photoH, 16); ctx.clip();
+    if (img) {
+      // Лёгкий автозум, чтобы съесть белые поля архивных фото по краям
+      const sw = img.naturalWidth || img.width;
+      const sh = img.naturalHeight || img.height;
+      const scale = Math.max(photoW / sw, photoH / sh) * 1.03;
+      const dw = sw * scale;
+      const dh = sh * scale;
+      const dx = photoX + (photoW - dw) / 2;
+      const dy = photoY + (photoH - dh) / 2;
+      ctx.drawImage(img, dx, dy, dw, dh);
+    } else {
+      const pg = ctx.createLinearGradient(photoX, photoY, photoX, photoY + photoH);
+      pg.addColorStop(0,'#f0e4ea'); pg.addColorStop(1,'#eadbe5');
+      ctx.fillStyle = pg; ctx.fillRect(photoX, photoY, photoW, photoH);
+      ctx.fillStyle = '#8e7484'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.font = `600 ${Math.max(14, Math.round(cssWidth*.04))}px Inter, sans-serif`;
+      ctx.fillText('Фото не найдено', photoX + photoW/2, photoY + photoH/2);
+    }
+    ctx.restore();
+    ctx.strokeStyle='rgba(216,94,146,.14)'; ctx.lineWidth=1;
+    roundRectPath(ctx, photoX, photoY, photoW, photoH, 16); ctx.stroke();
+
+    // Блок цитаты (динамический)
+    const textX = cssWidth / 2;
+    const textY = quoteBoxY + quoteTopPad;
+
+    ctx.save();
+    ctx.shadowColor='rgba(125,70,100,.08)'; ctx.shadowBlur=18; ctx.shadowOffsetY=6;
+    ctx.fillStyle='rgba(255,255,255,.92)';
+    roundRectPath(ctx, quoteBoxX, quoteBoxY, quoteBoxW, quoteBoxH, 18); ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle='rgba(216,94,146,.12)'; ctx.lineWidth=1;
+    roundRectPath(ctx, quoteBoxX, quoteBoxY, quoteBoxW, quoteBoxH, 18); ctx.stroke();
+
+    ctx.fillStyle='rgba(216,94,146,.22)';
+    ctx.font=`700 ${Math.round(cssWidth*.16)}px Georgia, serif`;
+    ctx.textAlign='left'; ctx.textBaseline='top';
+    ctx.fillText('“', quoteBoxX + 16, quoteBoxY + 4);
+
+    ctx.fillStyle='#302531';
+    ctx.font=`500 ${quoteFont}px Lora, Georgia, serif`;
+    ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+    drawLines(ctx, lines, textX, textY, lineHeight);
+
+    // Имя автора строго под белой подложкой
+    const authorY = quoteBoxY + quoteBoxH + authorGap;
+    ctx.fillStyle='rgba(108,92,105,.92)';
+    ctx.font=`600 ${authorFont}px Inter, sans-serif`;
+    ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+    ctx.fillText(entry?.author || 'Автор', cssWidth/2, authorY);
+  }
+
+  async function refresh(){
+    pickRandom();
+    await renderCard();
+    setStatus(`Готово. Можете сохранить картинку.${state.current?.photo ? ' Фото: ' + state.current.photo : ''}`);
+  }
+
+  function roundedBlobFromCanvas(sourceCanvas){
+    return new Promise((resolve, reject) => {
+      sourceCanvas.toBlob(b => b ? resolve(b) : reject(new Error('Не удалось создать PNG')), 'image/png');
+    });
+  }
+
+  async function saveImage(){
+    if (!state.current) return;
+    setBusy(true); setStatus('Готовим изображение...');
+    try {
+      await renderCard();
+      const blob = await roundedBlobFromCanvas(canvas);
+      const safeAuthor = (state.current.author || 'author').replace(/[^\p{L}\p{N}]+/gu,'-').replace(/^-+|-+$/g,'') || 'author';
+      const fileName = `quote-${safeAuthor}-${Date.now()}.png`;
+      const file = new File([blob], fileName, { type: 'image/png' });
+
+      const canShare = typeof navigator.share === 'function' && typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] });
+      if (canShare) {
+        await navigator.share({ files: [file], title: 'Цитата' });
+        setStatus('Изображение отправлено через меню «Поделиться».');
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = fileName;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        setStatus('PNG скачан.');
+      }
+    } catch (e) {
+      console.error(e);
+      setStatus(e.message || 'Не получилось сохранить изображение.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  newBtn.addEventListener('click', async () => {
+    if (state.busy) return;
+    setBusy(true);
+    try { await refresh(); } finally { setBusy(false); }
+  });
+  saveBtn.addEventListener('click', saveImage);
+  window.addEventListener('resize', () => { if (state.current) renderCard(); });
+
+  (async function init(){
+    setBusy(true);
+    try {
+      await loadItems();
+      await refresh();
+    } catch (e) {
+      console.error(e);
+      setStatus(e.message || 'Ошибка загрузки цитат.');
+      // Пустая карточка-заглушка без фолбэка, чтобы было видно интерфейс
+      state.current = { quote: 'Добавьте строки в citaty.txt в формате: Текст (Автор) (photo.jpg)', author: 'Подсказка', photo: '' };
+      await renderCard();
+    } finally {
+      setBusy(false);
+    }
+  })();
+  </script>
+</body>
+</html>
