@@ -66,7 +66,8 @@
   <script>
   const state = {
     items: [], current: null, lastIndex: -1, busy: false,
-    imgCache: new Map()
+    imgCache: new Map(),
+    remainingIndices: []
   };
 
   const canvas = document.getElementById('previewCanvas');
@@ -116,13 +117,34 @@
     state.items = items;
   }
 
+  function shuffle(array){
+    const arr = [...array];
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  function refillQueue(){
+    const allIndices = state.items.map((_, i) => i);
+    let pool = shuffle(allIndices);
+
+    if (pool.length > 1 && pool[0] === state.lastIndex) {
+      const swapIndex = pool.findIndex(idx => idx !== state.lastIndex);
+      if (swapIndex > 0) {
+        [pool[0], pool[swapIndex]] = [pool[swapIndex], pool[0]];
+      }
+    }
+
+    state.remainingIndices = pool;
+  }
+
   function pickRandom(){
     if (!state.items.length) return null;
-    let idx = 0;
-    if (state.items.length > 1) {
-      do idx = Math.floor(Math.random() * state.items.length);
-      while (idx === state.lastIndex);
-    }
+    if (!state.remainingIndices.length) refillQueue();
+
+    const idx = state.remainingIndices.shift();
     state.lastIndex = idx;
     state.current = state.items[idx];
     return state.current;
